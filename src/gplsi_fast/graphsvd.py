@@ -1,4 +1,4 @@
-
+import time
 import numpy as np
 from numpy.linalg import norm
 from scipy.sparse.linalg import svds
@@ -40,13 +40,23 @@ def graphSVD(
     if initialize:
         if verbose:
             print("Initializing...")
+        
+        t0 = time.time()
+        print("[graphSVD] Computing colsums...")
         colsums = np.sum(X, axis=0)
+        print(f"    {time.time() - t0} s"); t0 = time.time()
+        print("[graphSVD] Computing cov...")
         cov = X.T @ X - np.diag(colsums / N)
+        print(f"    {time.time() - t0} s"); t0 = time.time()
+        print("[graphSVD] Running svds(cov, k=K)...")
         U_cov, s_cov, VT_cov = svds(cov, k=K)
+        print(f"    {time.time() - t0} s"); t0 = time.time()
         V = VT_cov.T
         L = s_cov  # keep as 1-D
         V_init, L_init = V, L
+        print("[graphSVD] Running svds(X, k=K)")
         U, sX, VTX = svds(X, k=K)
+        print(f"    {time.time() - t0} s"); t0 = time.time()
         U_init = U
     else:
         U, sX, VTX = svds(X, k=K)
@@ -67,13 +77,24 @@ def graphSVD(
         #P_V_old = np.dot(V, V.T) 
         #X_hat_old = (P_U_old @ X) @ P_V_old
 
+        t0 = time.time()
+        print("[graphSVD] Running update_U_tilde...")
         U, lambd, lambd_errs = update_U_tilde(X, V, L, G, weights, folds, lambd_grid)
+        print(f"    {time.time() - t0} s"); t0 = time.time()
+        print("[graphSVD] Running update_V_L_tilde...")
         V, L = update_V_L_tilde(X, U)
+        print(f"    {time.time() - t0} s"); t0 = time.time()
 
         # # Subspace convergence (cheap): no multiplies by X
+        print("[graphSVD] Performing _subspace_gap(U_old, U)...")
         gapU = _subspace_gap(U_old, U)
+        print(f"    {time.time() - t0} s"); t0 = time.time()
+        print("[graphSVD] Performing _subspace_gap(V_old, V)...")
         gapV = _subspace_gap(V_old, V)
+        print(f"    {time.time() - t0} s"); t0 = time.time()
+        print("[graphSVD] Performing (gapU + gapV) / (2 * np.sqrt(K))...")
         score = (gapU + gapV) / (2 * np.sqrt(K))
+        print(f"    {time.time() - t0} s"); t0 = time.time()
         # 
         #P_U = np.dot(U, U.T)
         #P_V = np.dot(V, V.T)
@@ -92,8 +113,13 @@ def graphSVD(
 def lambda_search(j, folds, X, V, L, G, weights, lambd_grid):
     fold = folds[j]
     X_tilde = interpolate_X(X, G, folds, j)
+    # print(f"Type X_tilde in graphsvd.py: {type(X_tilde)}")
+    # print(f"Type V in graphsvd.py: {type(V)}")
     X_tildeV = X_tilde @ V
+    # print(f"Type X_tildeV in graphsvd.py: {type(X_tildeV)}")
+    # print(f"Type X in graphsvd.py: {type(X)}")
     X_j = X[fold, :] @ V
+
 
     errs = []
     best_err = float("inf")
