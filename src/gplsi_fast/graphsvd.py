@@ -3,9 +3,12 @@ import numpy as np
 from numpy.linalg import norm
 from scipy.sparse.linalg import svds
 from multiprocessing import Pool, cpu_count
+from functools import partial
+
 
 from .utils import get_folds_disconnected_G, interpolate_X
 import pycvxcluster.pycvxcluster
+
 
 
 def _subspace_gap(U_old, U_new):
@@ -32,8 +35,9 @@ def graphSVD(
     initialize,
 ):
     n = X.shape[0]
+    # folds is a dictionary with five key-value pairs
     srn, folds, G, mst = get_folds_disconnected_G(edge_df)
-
+    
     lambd_grid = (lamb_start * np.power(step_size, np.arange(grid_len))).tolist()
     lambd_grid.insert(0, 1e-6)
 
@@ -170,12 +174,13 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid):
     # Keep "X @ V" (do not build diag(L) or invert unless theory requires)
     XV = X @ V
 
-    from functools import partial
+    
     with Pool(min(len(folds), cpu_count())) as p:
         results = p.starmap(
             lambda_search,
             [(j, folds, X, V, L, G, weights, lambd_grid) for j in folds.keys()],
         )
+
     for j, errs, _, lambd_best in results:
         lambd_errs["fold_errors"][j] = errs
         lambds_best.append(lambd_best)

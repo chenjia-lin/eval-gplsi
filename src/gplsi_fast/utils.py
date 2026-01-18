@@ -4,7 +4,10 @@ import networkx as nx
 import scipy.sparse as sp
 
 def get_folds_disconnected_G(edge_df):
+    # Create NetworkX graph object from edge_df
     G = nx.from_pandas_edgelist(edge_df, "src", "tgt")
+
+    # Getting all connected components
     connected_subgraphs = list(nx.connected_components(G))
     folds = {i: [] for i in range(5)}
     for graph in connected_subgraphs:
