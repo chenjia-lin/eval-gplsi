@@ -2,7 +2,8 @@ import time
 import numpy as np
 from numpy.linalg import norm
 from scipy.sparse.linalg import svds
-from multiprocessing import Pool, cpu_count
+import os
+from multiprocessing import Pool
 from functools import partial
 
 
@@ -173,19 +174,33 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid):
 
     # Keep "X @ V" (do not build diag(L) or invert unless theory requires)
     XV = X @ V
+    print("[update_U_tilde] Computed XV = X @ V")
 
-    
-    with Pool(min(len(folds), cpu_count())) as p:
+    # For getting the correct CPU count on the cluster
+    try:
+        # For cluster runs
+        num_cpus = len(os.sched_getaffinity(0))
+    except AttributeError:
+        # For local runs
+        num_cpus = os.cpu_count()
+
+    print(f"[update_U_tilde] len(folds): {len(folds)}")
+    print(f"[update_U_tilde] num_cpus: {num_cpus}")
+    print("[update_U_tilde] Pooling...")
+    with Pool(min(len(folds), num_cpus)) as p:
         results = p.starmap(
             lambda_search,
             [(j, folds, X, V, L, G, weights, lambd_grid) for j in folds.keys()],
         )
+    print("[update_U_tilde] Obtained results...")
 
+    print("[update_U_tilde] Looping over results...")
     for j, errs, _, lambd_best in results:
         lambd_errs["fold_errors"][j] = errs
         lambds_best.append(lambd_best)
 
     # Aggregate CV errors over available folds
+    print("[update_U_tilde] Aggregating CV errors over available folds...")
     common_len = min(len(v) for v in lambd_errs["fold_errors"].values())
     cv_errs = np.sum([np.array(lambd_errs["fold_errors"][i][:common_len]) for i in lambd_errs["fold_errors"]], axis=0)
     lambd_cv = lambd_grid[int(np.argmin(cv_errs))]
