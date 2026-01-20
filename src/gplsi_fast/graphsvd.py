@@ -116,14 +116,18 @@ def graphSVD(
 
 
 def lambda_search(j, folds, X, V, L, G, weights, lambd_grid):
+    print("[lambda_search] Running...")
     fold = folds[j]
     X_tilde = interpolate_X(X, G, folds, j)
+    print("[lambda_search] Got X_tilde")
     # print(f"Type X_tilde in graphsvd.py: {type(X_tilde)}")
     # print(f"Type V in graphsvd.py: {type(V)}")
     X_tildeV = X_tilde @ V
+    print("[lambda_search] Got X_tildeV")
     # print(f"Type X_tildeV in graphsvd.py: {type(X_tildeV)}")
     # print(f"Type X in graphsvd.py: {type(X)}")
     X_j = X[fold, :] @ V
+    print("[lambda_search] Got X_j")
 
 
     errs = []
@@ -132,13 +136,16 @@ def lambda_search(j, folds, X, V, L, G, weights, lambd_grid):
     lambd_best = 0.0
 
     # Cheaper inner settings
+    print("[lambda_search] Getting snnal...")
     ssnal = pycvxcluster.pycvxcluster.SSNAL(verbose=0, admm_iter=0, maxiter=200, stoptol=1e-5)
 
     rises = 0
     last_err = float("inf")
 
+    print("[lambda_search] Looping over lambd_grid...")
     for fitn, lambd in enumerate(lambd_grid):
         ssnal.gamma = lambd
+        print(f"[lambda_search] Running ssnal.fit() for {fitn, lambd}...")
         ssnal.fit(
             X=X_tildeV,
             weight_matrix=weights,
@@ -147,19 +154,23 @@ def lambda_search(j, folds, X, V, L, G, weights, lambd_grid):
             recalculate_weights= (fitn == 0),
         )
         # warm-start
+        print(f"[lambda_search] Warm starting...")
         ssnal.kwargs["x0"] = ssnal.centers_
         ssnal.kwargs["y0"] = ssnal.y_
         ssnal.kwargs["z0"] = ssnal.z_
 
+        print(f"[lambda_search] Computing U_tilde...")
         U_tilde = ssnal.centers_.T
         err = norm(X_j - U_tilde[fold, :]) / max(1, len(fold))
         errs.append(err)
 
+        print(f"[lambda_search] Running if err < best_err:...")
         if err < best_err:
             lambd_best = lambd
             U_best = U_tilde
             best_err = err
 
+        print(f"[lambda_search] Setting rises...")
         rises = rises + 1 if err > last_err else 0
         last_err = err
         if rises >= 3:  # early stop when rising consecutively
@@ -177,21 +188,41 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid):
     print("[update_U_tilde] Computed XV = X @ V")
 
     # For getting the correct CPU count on the cluster
-    try:
-        # For cluster runs
-        num_cpus = len(os.sched_getaffinity(0))
-    except AttributeError:
-        # For local runs
-        num_cpus = os.cpu_count()
+    # try:
+    #     # For cluster runs
+    #     num_cpus = len(os.sched_getaffinity(0))
+    # except AttributeError:
+    #     # For local runs
+    #     num_cpus = os.cpu_count()
 
-    print(f"[update_U_tilde] len(folds): {len(folds)}")
-    print(f"[update_U_tilde] num_cpus: {num_cpus}")
-    print("[update_U_tilde] Pooling...")
-    with Pool(min(len(folds), num_cpus)) as p:
+    ## The following works if we just want to run serially
+    # results = []
+    # for j in folds.keys():
+    #     t0 = time.time()
+    #     print(f"[update_U_tilde] lambda_search on fold {j}...")
+    #     search_results = lambda_search(j, folds, X, V, L, G, weights, lambd_grid)
+    #     print(search_results)
+    #     results.append(search_results)
+    #     print(f"[update_U_tilde] lambda_search on fold {j} finished in {time.time()-t0} s...")
+
+   
+    ## For cluster
+    num_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
+    with Pool(num_cpus) as p:
         results = p.starmap(
             lambda_search,
-            [(j, folds, X, V, L, G, weights, lambd_grid) for j in folds.keys()],
+            [(j, folds, X, V, L, G, weights, lambd_grid) for j in folds.keys()]
         )
+
+    ## Original
+    # print(f"[update_U_tilde] len(folds): {len(folds)}")
+    # print(f"[update_U_tilde] num_cpus: {num_cpus}")
+    # print("[update_U_tilde] Pooling...")
+    # with Pool(min(len(folds), num_cpus)) as p:
+    #     results = p.starmap(
+    #         lambda_search,
+    #         [(j, folds, X, V, L, G, weights, lambd_grid) for j in folds.keys()],
+    #     )
     print("[update_U_tilde] Obtained results...")
 
     print("[update_U_tilde] Looping over results...")
