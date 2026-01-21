@@ -1,11 +1,10 @@
+import os
 import time
 import numpy as np
 from numpy.linalg import norm
 from scipy.sparse.linalg import svds
-import os
-from multiprocessing import Pool
-from functools import partial
 
+from joblib import Parallel, delayed
 
 from .utils import get_folds_disconnected_G, interpolate_X
 import pycvxcluster.pycvxcluster
@@ -157,6 +156,7 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid, parallelize_search, v
     # Keep "X @ V" (do not build diag(L) or invert unless theory requires)
     XV = X @ V
 
+    # Performing lambda_search on folds (either serial or parallel)
     if parallelize_search:
         # Counting number of available cores (on cluster and locally)
         try:
@@ -170,15 +170,13 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid, parallelize_search, v
             print("  Running lambda_search in parallel...")
             parallel_start = time.time()
 
-        with Pool(min(len(folds), num_cpus)) as p:
-            results = p.starmap(
-                lambda_search,
-                [(j, folds, X, V, L, G, weights, lambd_grid, verbose) for j in folds.keys()]
-            )
+        ## Using joblib (should also work on Mac?)
+        results = Parallel(n_jobs=min(len(folds),num_cpus), prefer="processes")(
+            delayed(lambda_search)(j, folds, X, V, L, G, weights, lambd_grid, verbose)
+            for j in folds.keys()
+        )
         if verbose:
             print(f"  Parallel lambda_search finished in {time.time() - parallel_start} s")
-
-
     else:
         results = []
         if verbose:
@@ -198,16 +196,6 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid, parallelize_search, v
         
         if verbose:
             print(f"  Serial lambda_search finished in {time.time() - serial_start} s")
-
-    ## Original
-    # print(f"[update_U_tilde] len(folds): {len(folds)}")
-    # print(f"[update_U_tilde] num_cpus: {num_cpus}")
-    # print("[update_U_tilde] Pooling...")
-    # with Pool(min(len(folds), num_cpus)) as p:
-    #     results = p.starmap(
-    #         lambda_search,
-    #         [(j, folds, X, V, L, G, weights, lambd_grid) for j in folds.keys()],
-    #     )
 
     for j, errs, _, lambd_best in results:
         lambd_errs["fold_errors"][j] = errs
