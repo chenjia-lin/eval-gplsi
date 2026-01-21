@@ -27,6 +27,7 @@ def graphSVD(
     K,
     edge_df,
     weights,
+    parallelize_search,
     lamb_start,
     step_size,
     grid_len,
@@ -43,26 +44,18 @@ def graphSVD(
     lambd_grid.insert(0, 1e-6)
 
     if initialize:
-        if verbose:
-            print("Initializing...")
+        if verbose: print("Initializing...")
         
-        t0 = time.time()
-        print("[graphSVD] Computing colsums...")
         colsums = np.sum(X, axis=0)
-        print(f"    {time.time() - t0} s"); t0 = time.time()
-        print("[graphSVD] Computing cov...")
         cov = X.T @ X - np.diag(colsums / N)
-        print(f"    {time.time() - t0} s"); t0 = time.time()
-        print("[graphSVD] Running svds(cov, k=K)...")
         U_cov, s_cov, VT_cov = svds(cov, k=K)
-        print(f"    {time.time() - t0} s"); t0 = time.time()
         V = VT_cov.T
         L = s_cov  # keep as 1-D
         V_init, L_init = V, L
-        print("[graphSVD] Running svds(X, k=K)")
         U, sX, VTX = svds(X, k=K)
-        print(f"    {time.time() - t0} s"); t0 = time.time()
         U_init = U
+
+        if verbose: print("Initialization complete")
     else:
         U, sX, VTX = svds(X, k=K)
         V = VTX.T
@@ -81,26 +74,20 @@ def graphSVD(
         #P_U_old = np.dot(U, U.T) 
         #P_V_old = np.dot(V, V.T) 
         #X_hat_old = (P_U_old @ X) @ P_V_old
-
-        t0 = time.time()
-        print("[graphSVD] Running update_U_tilde...")
-        U, lambd, lambd_errs = update_U_tilde(X, V, L, G, weights, folds, lambd_grid)
-        print(f"    {time.time() - t0} s"); t0 = time.time()
-        print("[graphSVD] Running update_V_L_tilde...")
+        
+        if verbose: 
+            print(f"Iteration {niter + 1}: updating U_tilde...")
+        U, lambd, lambd_errs = update_U_tilde(
+            X, V, L, G, weights, folds, lambd_grid, parallelize_search, verbose
+        )
+        
         V, L = update_V_L_tilde(X, U)
-        print(f"    {time.time() - t0} s"); t0 = time.time()
 
         # # Subspace convergence (cheap): no multiplies by X
-        print("[graphSVD] Performing _subspace_gap(U_old, U)...")
         gapU = _subspace_gap(U_old, U)
-        print(f"    {time.time() - t0} s"); t0 = time.time()
-        print("[graphSVD] Performing _subspace_gap(V_old, V)...")
         gapV = _subspace_gap(V_old, V)
-        print(f"    {time.time() - t0} s"); t0 = time.time()
-        print("[graphSVD] Performing (gapU + gapV) / (2 * np.sqrt(K))...")
         score = (gapU + gapV) / (2 * np.sqrt(K))
-        print(f"    {time.time() - t0} s"); t0 = time.time()
-        # 
+
         #P_U = np.dot(U, U.T)
         #P_V = np.dot(V, V.T)
         #X_hat = (P_U @ X) @ P_V 
@@ -115,20 +102,11 @@ def graphSVD(
     return U, V, L, U_init, V_init, L_init, lambd, lambd_errs, niter
 
 
-def lambda_search(j, folds, X, V, L, G, weights, lambd_grid):
-    print("[lambda_search] Running...")
+def lambda_search(j, folds, X, V, L, G, weights, lambd_grid, verbose):
     fold = folds[j]
     X_tilde = interpolate_X(X, G, folds, j)
-    print("[lambda_search] Got X_tilde")
-    # print(f"Type X_tilde in graphsvd.py: {type(X_tilde)}")
-    # print(f"Type V in graphsvd.py: {type(V)}")
     X_tildeV = X_tilde @ V
-    print("[lambda_search] Got X_tildeV")
-    # print(f"Type X_tildeV in graphsvd.py: {type(X_tildeV)}")
-    # print(f"Type X in graphsvd.py: {type(X)}")
     X_j = X[fold, :] @ V
-    print("[lambda_search] Got X_j")
-
 
     errs = []
     best_err = float("inf")
@@ -136,16 +114,13 @@ def lambda_search(j, folds, X, V, L, G, weights, lambd_grid):
     lambd_best = 0.0
 
     # Cheaper inner settings
-    print("[lambda_search] Getting snnal...")
     ssnal = pycvxcluster.pycvxcluster.SSNAL(verbose=0, admm_iter=0, maxiter=200, stoptol=1e-5)
 
     rises = 0
     last_err = float("inf")
 
-    print("[lambda_search] Looping over lambd_grid...")
     for fitn, lambd in enumerate(lambd_grid):
         ssnal.gamma = lambd
-        print(f"[lambda_search] Running ssnal.fit() for {fitn, lambd}...")
         ssnal.fit(
             X=X_tildeV,
             weight_matrix=weights,
@@ -154,23 +129,19 @@ def lambda_search(j, folds, X, V, L, G, weights, lambd_grid):
             recalculate_weights= (fitn == 0),
         )
         # warm-start
-        print(f"[lambda_search] Warm starting...")
         ssnal.kwargs["x0"] = ssnal.centers_
         ssnal.kwargs["y0"] = ssnal.y_
         ssnal.kwargs["z0"] = ssnal.z_
 
-        print(f"[lambda_search] Computing U_tilde...")
         U_tilde = ssnal.centers_.T
         err = norm(X_j - U_tilde[fold, :]) / max(1, len(fold))
         errs.append(err)
 
-        print(f"[lambda_search] Running if err < best_err:...")
         if err < best_err:
             lambd_best = lambd
             U_best = U_tilde
             best_err = err
 
-        print(f"[lambda_search] Setting rises...")
         rises = rises + 1 if err > last_err else 0
         last_err = err
         if rises >= 3:  # early stop when rising consecutively
@@ -179,40 +150,54 @@ def lambda_search(j, folds, X, V, L, G, weights, lambd_grid):
     return j, errs, U_best, lambd_best
 
 
-def update_U_tilde(X, V, L, G, weights, folds, lambd_grid):
+def update_U_tilde(X, V, L, G, weights, folds, lambd_grid, parallelize_search, verbose):
     lambds_best = []
     lambd_errs = {"fold_errors": {}, "final_errors": []}
 
     # Keep "X @ V" (do not build diag(L) or invert unless theory requires)
     XV = X @ V
-    print("[update_U_tilde] Computed XV = X @ V")
 
-    # For getting the correct CPU count on the cluster
-    # try:
-    #     # For cluster runs
-    #     num_cpus = len(os.sched_getaffinity(0))
-    # except AttributeError:
-    #     # For local runs
-    #     num_cpus = os.cpu_count()
+    if parallelize_search:
+        # Counting number of available cores (on cluster and locally)
+        try:
+            # For cluster runs
+            num_cpus = len(os.sched_getaffinity(0))
+        except AttributeError:
+            # For local runs
+            num_cpus = os.cpu_count()
 
-    ## The following works if we just want to run serially
-    # results = []
-    # for j in folds.keys():
-    #     t0 = time.time()
-    #     print(f"[update_U_tilde] lambda_search on fold {j}...")
-    #     search_results = lambda_search(j, folds, X, V, L, G, weights, lambd_grid)
-    #     print(search_results)
-    #     results.append(search_results)
-    #     print(f"[update_U_tilde] lambda_search on fold {j} finished in {time.time()-t0} s...")
+        if verbose:
+            print("  Running lambda_search in parallel...")
+            parallel_start = time.time()
 
-   
-    ## For cluster
-    num_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-    with Pool(num_cpus) as p:
-        results = p.starmap(
-            lambda_search,
-            [(j, folds, X, V, L, G, weights, lambd_grid) for j in folds.keys()]
-        )
+        with Pool(num_cpus) as p:
+            results = p.starmap(
+                lambda_search,
+                [(j, folds, X, V, L, G, weights, lambd_grid, verbose) for j in folds.keys()]
+            )
+        if verbose:
+            print(f"  Parallel lambda_search finished in {time.time() - parallel_start} s")
+
+
+    else:
+        results = []
+        if verbose:
+            serial_start = time.time()
+            print(f"  Running lambda_search in series...")
+
+        for j in folds.keys():
+            if verbose:
+                print(f"    Running lambda_search on fold {j}...")
+                fold_j_start = time.time()
+
+            search_results = lambda_search(j, folds, X, V, L, G, weights, lambd_grid, verbose)
+            results.append(search_results)
+
+            if verbose:
+                print(f"    lambda_search on fold {j} finished in {time.time()-fold_j_start} s")
+        
+        if verbose:
+            print(f"  Serial lambda_search finished in {time.time() - serial_start} s")
 
     ## Original
     # print(f"[update_U_tilde] len(folds): {len(folds)}")
@@ -223,15 +208,12 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid):
     #         lambda_search,
     #         [(j, folds, X, V, L, G, weights, lambd_grid) for j in folds.keys()],
     #     )
-    print("[update_U_tilde] Obtained results...")
 
-    print("[update_U_tilde] Looping over results...")
     for j, errs, _, lambd_best in results:
         lambd_errs["fold_errors"][j] = errs
         lambds_best.append(lambd_best)
 
     # Aggregate CV errors over available folds
-    print("[update_U_tilde] Aggregating CV errors over available folds...")
     common_len = min(len(v) for v in lambd_errs["fold_errors"].values())
     cv_errs = np.sum([np.array(lambd_errs["fold_errors"][i][:common_len]) for i in lambd_errs["fold_errors"]], axis=0)
     lambd_cv = lambd_grid[int(np.argmin(cv_errs))]

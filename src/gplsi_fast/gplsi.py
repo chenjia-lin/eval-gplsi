@@ -62,7 +62,7 @@ class GpLSI_(object):
         self.initialize = initialize
 
     # ----------------------- public API -----------------------
-    def fit(self, X, N, K, edge_df, weights):
+    def fit(self, X, N, K, edge_df, weights, parallelize_search):
         if self.method == "pLSI":
             if self.verbose:
                 print("Running pLSI...")
@@ -88,6 +88,7 @@ class GpLSI_(object):
                 K,
                 edge_df,
                 weights,
+                parallelize_search,
                 self.lamb_start,
                 self.step_size,
                 self.grid_len,
