@@ -170,7 +170,7 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid, parallelize_search, v
             print("  Running lambda_search in parallel...")
             parallel_start = time.time()
 
-        with Pool(num_cpus) as p:
+        with Pool(min(len(folds), num_cpus)) as p:
             results = p.starmap(
                 lambda_search,
                 [(j, folds, X, V, L, G, weights, lambd_grid, verbose) for j in folds.keys()]
